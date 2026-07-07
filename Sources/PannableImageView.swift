@@ -19,13 +19,29 @@ final class CenteringClipView: NSClipView {
 
 /// An image view that can be click-and-dragged to pan within its enclosing scroll view.
 final class PannableImageView: NSImageView {
+    private var lastDragLocation: NSPoint?
+
+    override func mouseDown(with event: NSEvent) {
+        lastDragLocation = event.locationInWindow
+    }
+
     override func mouseDragged(with event: NSEvent) {
         guard let scrollView = enclosingScrollView else { return }
+        // Track the cursor's absolute position rather than event.deltaX/deltaY: the
+        // latter are raw hardware deltas that aren't reliably populated by every
+        // input source (e.g. some synthesized drags), so panning could silently no-op.
+        let location = event.locationInWindow
+        let previous = lastDragLocation ?? location
+        lastDragLocation = location
+
         let clipView = scrollView.contentView
         var origin = clipView.bounds.origin
-        origin.x -= event.deltaX
-        origin.y += event.deltaY
-        clipView.scroll(to: origin)
+        origin.x -= location.x - previous.x
+        origin.y -= location.y - previous.y
+        // scroll(to:) does not itself call constrainBoundsRect, so an unconstrained
+        // origin here would let a fully-visible image be dragged around anyway.
+        let constrained = clipView.constrainBoundsRect(NSRect(origin: origin, size: clipView.bounds.size))
+        clipView.setBoundsOrigin(constrained.origin)
         scrollView.reflectScrolledClipView(clipView)
     }
 }

@@ -64,6 +64,13 @@ final class ImageView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func layout() {
+        super.layout()
+        if displayMode == .real {
+            refreshRealSizeLayout()
+        }
+    }
+
     // MARK: - Setup
 
     private func setupImageViews() {
@@ -88,8 +95,13 @@ final class ImageView: NSView {
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
         scrollView.isHidden = true
+        // Layer-back the scroll chain so trackpad scrolling is GPU-composited instead of
+        // re-rendering the (possibly huge) image on every scroll tick.
+        scrollView.wantsLayer = true
+        scrollView.contentView.wantsLayer = true
 
         realImageView.imageScaling = .scaleNone
+        realImageView.wantsLayer = true
         scrollView.documentView = realImageView
 
         addSubview(scrollView)
@@ -259,18 +271,24 @@ final class ImageView: NSView {
         // Force the whole container to settle its final size now, so the clip view's
         // bounds below are accurate rather than relying on a later, uncertain layout pass.
         layoutSubtreeIfNeeded()
-        recenterRealSize()
+        refreshRealSizeLayout()
         // The first unhide of the scroll view can trigger one more layout pass that
         // shifts the scroll origin; recenter again after it settles.
         DispatchQueue.main.async { [weak self] in
-            self?.recenterRealSize()
+            self?.refreshRealSizeLayout()
         }
     }
 
-    private func recenterRealSize() {
+    /// Recenters the image and locks scrolling/panning on any axis where it already
+    /// fits the window, so a fully-visible image can't rubber-band or be dragged.
+    private func refreshRealSizeLayout() {
         let clipView = scrollView.contentView
         let doc = realImageView.frame.size
         let visible = clipView.bounds.size
+
+        scrollView.horizontalScrollElasticity = doc.width > visible.width ? .automatic : .none
+        scrollView.verticalScrollElasticity = doc.height > visible.height ? .automatic : .none
+
         let target = NSRect(
             origin: NSPoint(x: (doc.width - visible.width) / 2,
                             y: (doc.height - visible.height) / 2),
