@@ -10,11 +10,14 @@ Native Swift + AppKit. No dependencies, no Xcode project — one shell script bu
 |---|---|
 | `←` | Previous image in the same folder (by filename order) |
 | `→` | Next image in the same folder |
-| `R` | Jump to a random image in the same folder |
+| `r` | Jump to a random image in the same folder |
+| `0` | Toggle between fit-screen (default) and real size |
 | `⌘O` | Open an image |
 | `⌃W` / `⌘Q` | Quit |
 
 You can also drag an image file onto the window. The app reopens the last viewed image on launch.
+
+In real-size mode the image is shown at its actual pixel dimensions, centered; when it is larger than the window you can pan with trackpad scrolling or by click-dragging. Every `0` press re-centers. The bottom-right corner shows the image resolution (e.g. `2704 x 1756`).
 
 ## Building
 
@@ -31,9 +34,10 @@ The build script compiles `Sources/*.swift` with `swiftc`, assembles the `.app` 
 
 ```
 Sources/
-  main.swift        App entry point
-  AppDelegate.swift  Window, menu, file-open handling
-  ImageView.swift    Image display, folder navigation, hotkeys, overlay UI
+  main.swift             App entry point
+  AppDelegate.swift      Window, menu, file-open handling
+  ImageView.swift        Image display, folder navigation, hotkeys, overlay UI
+  PannableImageView.swift Centering clip view + click-drag panning for real-size mode
 Info.plist           Bundle metadata
 icon.jpg             App icon source (1024×1024+ square JPEG)
 build.sh             Build script → build/LaViewer.app

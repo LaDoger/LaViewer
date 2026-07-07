@@ -2,16 +2,26 @@ import Cocoa
 import UniformTypeIdentifiers
 
 final class ImageView: NSView {
-    private let imageView = NSImageView()
+    private enum DisplayMode {
+        case fit
+        case real
+    }
+
+    private let fitImageView = NSImageView()
+    private let scrollView = NSScrollView()
+    private let realImageView = PannableImageView()
+
     private let overlay = NSView()
     private let legendLabel = NSTextField(labelWithString: "")
-    private let hintLabel = NSTextField(labelWithString: "Drop an image file here, or press ⌘O")
+    private let resolutionLabel = NSTextField(labelWithString: "")
+    private let hintLabel = NSTextField(labelWithString: "Drop a file here, or press ⌘O")
 
     private var currentURL: URL?
     private var siblings: [URL] = []
     private var currentIndex: Int = 0
+    private var displayMode: DisplayMode = .fit
 
-    private static let legend: NSAttributedString = {
+    private static func legend(toggleLabel: String) -> NSAttributedString {
         let keyAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
             .foregroundColor: NSColor.white.withAlphaComponent(0.85),
@@ -22,9 +32,10 @@ final class ImageView: NSView {
             .foregroundColor: NSColor.white.withAlphaComponent(0.6),
         ]
         let items: [(key: String, desc: String)] = [
-            ("←", "prev image"),
-            ("→", "next image"),
-            ("R", "random image"),
+            ("←", "prev"),
+            ("→", "next"),
+            ("r", "random"),
+            ("0", toggleLabel),
         ]
         let result = NSMutableAttributedString()
         for (i, item) in items.enumerated() {
@@ -33,14 +44,14 @@ final class ImageView: NSView {
             result.append(NSAttributedString(string: " \(item.desc)", attributes: descAttrs))
         }
         return result
-    }()
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
 
-        setupImageView()
+        setupImageViews()
         setupOverlay()
         setupHint()
 
@@ -55,16 +66,44 @@ final class ImageView: NSView {
 
     // MARK: - Setup
 
-    private func setupImageView() {
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        addSubview(imageView)
+    private func setupImageViews() {
+        fitImageView.translatesAutoresizingMaskIntoConstraints = false
+        fitImageView.imageScaling = .scaleProportionallyUpOrDown
+        // A large image's intrinsic size must never win against the window: NSWindow holds
+        // its frame at ~500 priority, and the default 750 compression resistance would
+        // let a big image stretch the window past the screen edge (hiding the bottom bar).
+        for axis: NSLayoutConstraint.Orientation in [.horizontal, .vertical] {
+            fitImageView.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1), for: axis)
+            fitImageView.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: axis)
+        }
+        addSubview(fitImageView)
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.contentView = CenteringClipView()
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .black
+        // No visible scroller indicators: they'd sit right on top of the bottom overlay bar.
+        // Trackpad scrolling and click-drag panning both still work without them.
+        scrollView.hasHorizontalScroller = false
+        scrollView.hasVerticalScroller = false
+        scrollView.isHidden = true
+
+        realImageView.imageScaling = .scaleNone
+        scrollView.documentView = realImageView
+
+        addSubview(scrollView)
 
         NSLayoutConstraint.activate([
-            imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            imageView.topAnchor.constraint(equalTo: topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            fitImageView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            fitImageView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            fitImageView.topAnchor.constraint(equalTo: topAnchor),
+            fitImageView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }
 
@@ -72,18 +111,29 @@ final class ImageView: NSView {
         overlay.wantsLayer = true
         overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
         overlay.layer?.cornerRadius = 12
+        // Keep the bar composited above the scroll view no matter how AppKit
+        // reshuffles sibling layers during scrolling of large images.
+        overlay.layer?.zPosition = 100
         overlay.translatesAutoresizingMaskIntoConstraints = false
         addSubview(overlay)
 
         legendLabel.font = .systemFont(ofSize: 11, weight: .regular)
         legendLabel.alignment = .center
-        legendLabel.attributedStringValue = Self.legend
-        legendLabel.translatesAutoresizingMaskIntoConstraints = false
-        legendLabel.isEditable = false
-        legendLabel.isBordered = false
-        legendLabel.drawsBackground = false
+        legendLabel.attributedStringValue = Self.legend(toggleLabel: "real size")
+
+        resolutionLabel.textColor = NSColor.white.withAlphaComponent(0.6)
+        resolutionLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        resolutionLabel.alignment = .right
+
+        for field in [legendLabel, resolutionLabel] {
+            field.translatesAutoresizingMaskIntoConstraints = false
+            field.isEditable = false
+            field.isBordered = false
+            field.drawsBackground = false
+        }
 
         overlay.addSubview(legendLabel)
+        overlay.addSubview(resolutionLabel)
 
         NSLayoutConstraint.activate([
             overlay.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
@@ -93,6 +143,9 @@ final class ImageView: NSView {
 
             legendLabel.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
             legendLabel.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
+
+            resolutionLabel.trailingAnchor.constraint(equalTo: overlay.trailingAnchor, constant: -10),
+            resolutionLabel.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
         ])
     }
 
@@ -120,12 +173,22 @@ final class ImageView: NSView {
 
     private func display(url: URL) {
         currentURL = url
-        imageView.image = NSImage(contentsOf: url)
+        let image = NSImage(contentsOf: url)
+        fitImageView.image = image
+        realImageView.image = image
         hintLabel.isHidden = true
         window?.title = url.path
         window?.representedURL = url
         UserDefaults.standard.set(url.path, forKey: "lastImagePath")
         window?.makeFirstResponder(self)
+
+        if let image, let pixelSize = Self.pixelSize(of: image) {
+            resolutionLabel.stringValue = String(format: "%d x %d", Int(pixelSize.width), Int(pixelSize.height))
+        } else {
+            resolutionLabel.stringValue = ""
+        }
+
+        applyDisplayMode()
     }
 
     private func scanSiblings(for url: URL) {
@@ -167,6 +230,63 @@ final class ImageView: NSView {
         display(url: siblings[currentIndex])
     }
 
+    // MARK: - Display mode
+
+    private func toggleDisplayMode() {
+        displayMode = (displayMode == .fit) ? .real : .fit
+        applyDisplayMode()
+    }
+
+    private func applyDisplayMode() {
+        switch displayMode {
+        case .fit:
+            fitImageView.isHidden = false
+            scrollView.isHidden = true
+            legendLabel.attributedStringValue = Self.legend(toggleLabel: "real size")
+        case .real:
+            fitImageView.isHidden = true
+            scrollView.isHidden = false
+            legendLabel.attributedStringValue = Self.legend(toggleLabel: "fit screen")
+            layoutRealSize()
+        }
+    }
+
+    private func layoutRealSize() {
+        guard let image = realImageView.image else { return }
+        let pixelSize = Self.pixelSize(of: image) ?? image.size
+        realImageView.frame = NSRect(origin: .zero, size: pixelSize)
+
+        // Force the whole container to settle its final size now, so the clip view's
+        // bounds below are accurate rather than relying on a later, uncertain layout pass.
+        layoutSubtreeIfNeeded()
+        recenterRealSize()
+        // The first unhide of the scroll view can trigger one more layout pass that
+        // shifts the scroll origin; recenter again after it settles.
+        DispatchQueue.main.async { [weak self] in
+            self?.recenterRealSize()
+        }
+    }
+
+    private func recenterRealSize() {
+        let clipView = scrollView.contentView
+        let doc = realImageView.frame.size
+        let visible = clipView.bounds.size
+        let target = NSRect(
+            origin: NSPoint(x: (doc.width - visible.width) / 2,
+                            y: (doc.height - visible.height) / 2),
+            size: visible
+        )
+        // Set the bounds origin directly (constrained the same way live scrolling is);
+        // scroll(to:) can be coalesced away, this cannot.
+        clipView.setBoundsOrigin(clipView.constrainBoundsRect(target).origin)
+        scrollView.reflectScrolledClipView(clipView)
+    }
+
+    private static func pixelSize(of image: NSImage) -> NSSize? {
+        guard let rep = image.representations.first else { return nil }
+        return NSSize(width: rep.pixelsWide, height: rep.pixelsHigh)
+    }
+
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
@@ -176,9 +296,12 @@ final class ImageView: NSView {
         default: break
         }
 
-        if let chars = event.charactersIgnoringModifiers?.lowercased(), chars == "r" {
-            randomImage()
-            return
+        if let chars = event.charactersIgnoringModifiers?.lowercased() {
+            switch chars {
+            case "r": randomImage(); return
+            case "0": toggleDisplayMode(); return
+            default: break
+            }
         }
         super.keyDown(with: event)
     }
