@@ -34,17 +34,19 @@ The build script compiles `Sources/*.swift` with `swiftc`, assembles the `.app` 
 
 ```
 Sources/
-  main.swift             App entry point
-  AppDelegate.swift      Window, menu, file-open handling
-  ImageView.swift        Image display, folder navigation, hotkeys, overlay UI
-  PannableImageView.swift Centering clip view + click-drag panning for real-size mode
-Info.plist           Bundle metadata
-icon.jpg             App icon source (1024×1024+ square JPEG)
-build.sh             Build script → build/LaViewer.app
+  main.swift               App entry point
+  AppDelegate.swift        Window, menu, file-open handling
+  ImageView.swift          Image display, folder navigation, hotkeys, overlay UI
+  PannableImageView.swift  Centering clip view + click-drag panning for real-size mode
+Info.plist                 Bundle metadata
+icon.jpg                   App icon source (1024×1024+ square JPEG)
+build.sh                   Build script → build/LaViewer.app
 ```
 
 ## Notes
 
 - "Same folder" navigation lists sibling files whose extension conforms to `public.image`, sorted by filename (natural/numeric-aware order).
 - At the first/last image, `←`/`→` do nothing (no wraparound).
+- Real size means actual pixel dimensions (1 image pixel = 1 point), not adjusted for Retina backing scale.
+- Scrolling/panning is locked on any axis where the image already fits the window, so a fully-visible image can't rubber-band or be dragged.
 - The app is ad-hoc signed, so it runs locally but will trigger Gatekeeper if distributed to other machines.
