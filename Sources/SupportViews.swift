@@ -23,6 +23,20 @@ final class PassthroughImageView: NSImageView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+/// A text field that selects its whole content when it gains focus, so the user
+/// can immediately type a replacement value.
+final class SelectAllTextField: NSTextField {
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            DispatchQueue.main.async { [weak self] in
+                self?.currentEditor()?.selectAll(nil)
+            }
+        }
+        return accepted
+    }
+}
+
 /// Draws the crop selection: everything outside the selection is dimmed, the
 /// selection is outlined with corner handles and a "k crop" hint badge.
 /// Mouse-transparent.

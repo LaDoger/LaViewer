@@ -25,9 +25,13 @@ final class ImageView: NSView {
     private var displayMode: DisplayMode = .fit
     private var imagePixelSize: NSSize = .zero
 
-    private let widthField = NSTextField(string: "")
-    private let heightField = NSTextField(string: "")
+    private let widthField = SelectAllTextField(string: "")
+    private let heightField = SelectAllTextField(string: "")
     private let dimsSeparatorLabel = NSTextField(labelWithString: "x")
+    private let editLabel = NSTextField(labelWithString: "edit:")
+    private let colorSwatch = NSView()
+    private let colorHexLabel = NSTextField(labelWithString: "")
+    private var colorSampleRep: NSBitmapImageRep?
 
     /// Crop selection in image-pixel coordinates, origin at the image's top-left.
     private var cropSelectionPx: NSRect?
@@ -212,8 +216,10 @@ final class ImageView: NSView {
         dimsSeparatorLabel.drawsBackground = false
         dimsSeparatorLabel.isHidden = true
 
-        // Style the editable fields exactly like the resolution label: plain text,
-        // no chip background, so "600 x 373" reads as one piece of quiet text.
+        // Style the editable fields like the resolution label (same font/color,
+        // baseline-aligned) with a subtle grey chip as the editability hint.
+        // The chip is the layer's background so the cell keeps its tight text
+        // metrics and the vertical padding stays symmetric.
         for field in [widthField, heightField] {
             field.translatesAutoresizingMaskIntoConstraints = false
             field.isEditable = true
@@ -222,20 +228,50 @@ final class ImageView: NSView {
             field.textColor = NSColor.white.withAlphaComponent(0.6)
             field.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
             field.focusRingType = .none
+            field.wantsLayer = true
+            field.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.14).cgColor
+            field.layer?.cornerRadius = 3
             field.isHidden = true
             field.target = self
             field.action = #selector(dimensionFieldEdited(_:))
+            field.delegate = self
         }
         widthField.alignment = .right
         heightField.alignment = .left
         widthField.nextKeyView = heightField
         heightField.nextKeyView = widthField
 
+        editLabel.textColor = NSColor.white.withAlphaComponent(0.45)
+        editLabel.font = .systemFont(ofSize: 11)
+        editLabel.translatesAutoresizingMaskIntoConstraints = false
+        editLabel.isEditable = false
+        editLabel.isBordered = false
+        editLabel.drawsBackground = false
+        editLabel.isHidden = true
+
+        colorSwatch.translatesAutoresizingMaskIntoConstraints = false
+        colorSwatch.wantsLayer = true
+        colorSwatch.layer?.cornerRadius = 2
+        colorSwatch.layer?.borderWidth = 1
+        colorSwatch.layer?.borderColor = NSColor.white.withAlphaComponent(0.3).cgColor
+        colorSwatch.isHidden = true
+
+        colorHexLabel.textColor = NSColor.white.withAlphaComponent(0.6)
+        colorHexLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        colorHexLabel.translatesAutoresizingMaskIntoConstraints = false
+        colorHexLabel.isEditable = false
+        colorHexLabel.isBordered = false
+        colorHexLabel.drawsBackground = false
+        colorHexLabel.isHidden = true
+
         overlay.addSubview(legendLabel)
         overlay.addSubview(resolutionLabel)
+        overlay.addSubview(editLabel)
         overlay.addSubview(widthField)
         overlay.addSubview(dimsSeparatorLabel)
         overlay.addSubview(heightField)
+        overlay.addSubview(colorSwatch)
+        overlay.addSubview(colorHexLabel)
 
         NSLayoutConstraint.activate([
             overlay.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
@@ -259,6 +295,17 @@ final class ImageView: NSView {
             widthField.trailingAnchor.constraint(equalTo: dimsSeparatorLabel.leadingAnchor, constant: -4),
             widthField.firstBaselineAnchor.constraint(equalTo: dimsSeparatorLabel.firstBaselineAnchor),
             widthField.widthAnchor.constraint(equalToConstant: 44),
+
+            editLabel.trailingAnchor.constraint(equalTo: widthField.leadingAnchor, constant: -6),
+            editLabel.firstBaselineAnchor.constraint(equalTo: dimsSeparatorLabel.firstBaselineAnchor),
+
+            colorSwatch.leadingAnchor.constraint(equalTo: overlay.leadingAnchor, constant: 10),
+            colorSwatch.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
+            colorSwatch.widthAnchor.constraint(equalToConstant: 10),
+            colorSwatch.heightAnchor.constraint(equalToConstant: 10),
+
+            colorHexLabel.leadingAnchor.constraint(equalTo: colorSwatch.trailingAnchor, constant: 6),
+            colorHexLabel.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
         ])
     }
 
@@ -342,6 +389,14 @@ final class ImageView: NSView {
         } else {
             imagePixelSize = .zero
         }
+
+        // Bitmap for cursor color sampling, from the file's original pixels.
+        colorSampleRep = nil
+        if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+           let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+            colorSampleRep = NSBitmapImageRep(cgImage: cgImage)
+        }
+        hideColorSample()
 
         setCropSelection(nil)
         applyDisplayMode()
@@ -505,12 +560,14 @@ final class ImageView: NSView {
     private func updateDimensionControls() {
         if let sel = cropSelectionPx {
             resolutionLabel.isHidden = true
+            editLabel.isHidden = false
             widthField.isHidden = false
             dimsSeparatorLabel.isHidden = false
             heightField.isHidden = false
             widthField.stringValue = "\(Int(sel.width))"
             heightField.stringValue = "\(Int(sel.height))"
         } else {
+            editLabel.isHidden = true
             widthField.isHidden = true
             dimsSeparatorLabel.isHidden = true
             heightField.isHidden = true
@@ -649,7 +706,8 @@ final class ImageView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         dragMode = nil
-        if let sel = cropSelectionPx, sel.width < 1 || sel.height < 1 {
+        // Anything under 10x10 px was almost certainly an accidental drag or click.
+        if let sel = cropSelectionPx, sel.width < 10 || sel.height < 10 {
             setCropSelection(nil)
         }
         cursor(at: convert(event.locationInWindow, from: nil)).set()
@@ -673,11 +731,45 @@ final class ImageView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        cursor(at: convert(event.locationInWindow, from: nil)).set()
+        let point = convert(event.locationInWindow, from: nil)
+        cursor(at: point).set()
+        updateColorSample(at: point)
     }
 
     override func mouseExited(with event: NSEvent) {
         NSCursor.arrow.set()
+        hideColorSample()
+    }
+
+    // MARK: - Pixel color sampling
+
+    private func updateColorSample(at viewPoint: NSPoint) {
+        guard let rep = colorSampleRep,
+              !overlay.frame.contains(viewPoint),
+              let imageFrame = currentImageFrameInView(), imageFrame.contains(viewPoint),
+              let pixel = pixelPoint(fromViewPoint: viewPoint) else {
+            hideColorSample()
+            return
+        }
+        let x = min(Int(pixel.x), Int(imagePixelSize.width) - 1)
+        let y = min(Int(pixel.y), Int(imagePixelSize.height) - 1)
+        guard x >= 0, y >= 0,
+              let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
+            hideColorSample()
+            return
+        }
+        let r = Int((color.redComponent * 255).rounded())
+        let g = Int((color.greenComponent * 255).rounded())
+        let b = Int((color.blueComponent * 255).rounded())
+        colorHexLabel.stringValue = String(format: "#%02X%02X%02X", r, g, b)
+        colorSwatch.layer?.backgroundColor = color.cgColor
+        colorSwatch.isHidden = false
+        colorHexLabel.isHidden = false
+    }
+
+    private func hideColorSample() {
+        colorSwatch.isHidden = true
+        colorHexLabel.isHidden = true
     }
 
     /// The cursor that tells the user what a press at `point` would do.
@@ -794,5 +886,17 @@ final class ImageView: NSView {
         }
         load(url: url)
         return true
+    }
+}
+
+extension ImageView: NSTextFieldDelegate {
+    // Keep the width/height fields digits-only.
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField,
+              field === widthField || field === heightField else { return }
+        let filtered = field.stringValue.filter(\.isNumber)
+        if filtered != field.stringValue {
+            field.stringValue = filtered
+        }
     }
 }
