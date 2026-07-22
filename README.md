@@ -14,13 +14,15 @@ Native Swift + AppKit. No dependencies, no Xcode project — one shell script bu
 | `0` | Toggle between fit-screen (default) and real size |
 | drag | Select a crop area (Preview-style) |
 | `k` | Crop the selection — saves `{filename}_{i}.{extension}` next to the original |
-| `esc` | Clear the crop selection (a plain click clears it too) |
+| `esc` | Clear the crop selection (a plain click outside it clears it too) |
 | `⌘O` | Open an image |
 | `⌃W` / `⌘Q` | Quit |
 
 You can also drag an image file onto the window. The app reopens the last viewed image on launch.
 
-In real-size mode the image is shown at its actual pixel dimensions, centered; when it is larger than the window you can pan with trackpad scrolling. Every `0` press re-centers. The bottom-right corner shows the image resolution (e.g. `2704 x 1756`), or the selection's width × height in image pixels while a crop area is selected.
+In real-size mode the image is shown at its actual pixel dimensions, centered; when it is larger than the window you can pan with trackpad scrolling. Every `0` press re-centers. The bottom-right corner shows the image resolution (e.g. `2704 x 1756`).
+
+Once a crop area is selected it can be adjusted like in Preview: drag the corner handles or edges to resize, drag inside the selection to move it, and a `k crop` hint sits at the selection's bottom-right. The bottom-right of the bar swaps to two editable width/height fields — type a number and press return to resize the selection precisely (anchored at its top-left, clamped to the image).
 
 ## Building
 
