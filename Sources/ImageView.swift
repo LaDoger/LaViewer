@@ -212,22 +212,22 @@ final class ImageView: NSView {
         dimsSeparatorLabel.drawsBackground = false
         dimsSeparatorLabel.isHidden = true
 
+        // Style the editable fields exactly like the resolution label: plain text,
+        // no chip background, so "600 x 373" reads as one piece of quiet text.
         for field in [widthField, heightField] {
             field.translatesAutoresizingMaskIntoConstraints = false
             field.isEditable = true
             field.isBordered = false
-            field.drawsBackground = true
-            field.backgroundColor = NSColor.white.withAlphaComponent(0.18)
-            field.textColor = .white
+            field.drawsBackground = false
+            field.textColor = NSColor.white.withAlphaComponent(0.6)
             field.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-            field.alignment = .center
             field.focusRingType = .none
-            field.wantsLayer = true
-            field.layer?.cornerRadius = 4
             field.isHidden = true
             field.target = self
             field.action = #selector(dimensionFieldEdited(_:))
         }
+        widthField.alignment = .right
+        heightField.alignment = .left
         widthField.nextKeyView = heightField
         heightField.nextKeyView = widthField
 
@@ -250,17 +250,15 @@ final class ImageView: NSView {
             resolutionLabel.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
 
             heightField.trailingAnchor.constraint(equalTo: overlay.trailingAnchor, constant: -10),
-            heightField.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
-            heightField.widthAnchor.constraint(equalToConstant: 48),
-            heightField.heightAnchor.constraint(equalToConstant: 18),
+            heightField.firstBaselineAnchor.constraint(equalTo: dimsSeparatorLabel.firstBaselineAnchor),
+            heightField.widthAnchor.constraint(equalToConstant: 44),
 
-            dimsSeparatorLabel.trailingAnchor.constraint(equalTo: heightField.leadingAnchor, constant: -5),
+            dimsSeparatorLabel.trailingAnchor.constraint(equalTo: heightField.leadingAnchor, constant: -4),
             dimsSeparatorLabel.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
 
-            widthField.trailingAnchor.constraint(equalTo: dimsSeparatorLabel.leadingAnchor, constant: -5),
-            widthField.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
-            widthField.widthAnchor.constraint(equalToConstant: 48),
-            widthField.heightAnchor.constraint(equalToConstant: 18),
+            widthField.trailingAnchor.constraint(equalTo: dimsSeparatorLabel.leadingAnchor, constant: -4),
+            widthField.firstBaselineAnchor.constraint(equalTo: dimsSeparatorLabel.firstBaselineAnchor),
+            widthField.widthAnchor.constraint(equalToConstant: 44),
         ])
     }
 
@@ -539,67 +537,88 @@ final class ImageView: NSView {
         window?.makeFirstResponder(self)
     }
 
-    /// Decide what a mouse press at `point` (view space) does to the existing selection.
-    private func dragMode(forViewPoint point: NSPoint) -> DragMode? {
-        guard let pixel = pixelPoint(fromViewPoint: point) else { return nil }
-        guard let sel = cropSelectionPx, let viewSel = viewRect(fromPixelRect: sel) else {
-            return .select(anchor: pixel)
-        }
+    /// Where a view-space point falls relative to the current selection.
+    /// `nearMinX`/`nearMinY` refer to the view-space min edges of the selection.
+    private enum SelectionZone {
+        case corner(nearMinX: Bool, nearMinY: Bool)
+        case edgeLeft, edgeRight, edgeBottom, edgeTop
+        case inside
+    }
 
-        let cornerTolerance: CGFloat = 11
+    private func selectionZone(at point: NSPoint) -> SelectionZone? {
+        guard let sel = cropSelectionPx, let viewSel = viewRect(fromPixelRect: sel) else { return nil }
+
+        let cornerTolerance: CGFloat = 14
         let edgeTolerance: CGFloat = 6
 
-        // View-space edge proximity. Note the y-flip: the view's minY edge is the
-        // image's bottom (pixel maxY), so the pixel-space anchor is the opposite side.
         let nearMinX = abs(point.x - viewSel.minX) <= cornerTolerance
         let nearMaxX = abs(point.x - viewSel.maxX) <= cornerTolerance
         let nearMinY = abs(point.y - viewSel.minY) <= cornerTolerance
         let nearMaxY = abs(point.y - viewSel.maxY) <= cornerTolerance
-
-        // Corners first: both axes rubber-band from the opposite corner.
         if (nearMinX || nearMaxX) && (nearMinY || nearMaxY) {
-            let anchorX = nearMinX ? sel.maxX : sel.minX
-            let anchorY = nearMinY ? sel.minY : sel.maxY
-            return .resize(anchorX: anchorX, anchorY: anchorY,
-                           fixedX: (sel.minX, sel.maxX), fixedY: (sel.minY, sel.maxY))
+            return .corner(nearMinX: nearMinX, nearMinY: nearMinY)
         }
 
-        // Edges: one axis rubber-bands, the other keeps its range.
         let withinY = (viewSel.minY - edgeTolerance...viewSel.maxY + edgeTolerance).contains(point.y)
         let withinX = (viewSel.minX - edgeTolerance...viewSel.maxX + edgeTolerance).contains(point.x)
-        if withinY, abs(point.x - viewSel.minX) <= edgeTolerance {
-            return .resize(anchorX: sel.maxX, anchorY: nil,
-                           fixedX: (sel.minX, sel.maxX), fixedY: (sel.minY, sel.maxY))
-        }
-        if withinY, abs(point.x - viewSel.maxX) <= edgeTolerance {
-            return .resize(anchorX: sel.minX, anchorY: nil,
-                           fixedX: (sel.minX, sel.maxX), fixedY: (sel.minY, sel.maxY))
-        }
-        if withinX, abs(point.y - viewSel.minY) <= edgeTolerance {
-            return .resize(anchorX: nil, anchorY: sel.minY,
-                           fixedX: (sel.minX, sel.maxX), fixedY: (sel.minY, sel.maxY))
-        }
-        if withinX, abs(point.y - viewSel.maxY) <= edgeTolerance {
-            return .resize(anchorX: nil, anchorY: sel.maxY,
-                           fixedX: (sel.minX, sel.maxX), fixedY: (sel.minY, sel.maxY))
-        }
+        if withinY, abs(point.x - viewSel.minX) <= edgeTolerance { return .edgeLeft }
+        if withinY, abs(point.x - viewSel.maxX) <= edgeTolerance { return .edgeRight }
+        if withinX, abs(point.y - viewSel.minY) <= edgeTolerance { return .edgeBottom }
+        if withinX, abs(point.y - viewSel.maxY) <= edgeTolerance { return .edgeTop }
 
-        // Inside: move the whole selection.
-        if viewSel.contains(point) {
+        if viewSel.contains(point) { return .inside }
+        return nil
+    }
+
+    /// Decide what a mouse press at `point` (view space) does to the existing selection.
+    /// Note the y-flip: the view's minY edge is the image's bottom (pixel maxY), so the
+    /// pixel-space anchor for a grabbed side is the opposite side.
+    private func dragMode(forViewPoint point: NSPoint) -> DragMode? {
+        guard let pixel = pixelPoint(fromViewPoint: point) else { return nil }
+        guard let sel = cropSelectionPx else { return .select(anchor: pixel) }
+        let fixedX = (sel.minX, sel.maxX)
+        let fixedY = (sel.minY, sel.maxY)
+
+        switch selectionZone(at: point) {
+        case .corner(let nearMinX, let nearMinY):
+            return .resize(anchorX: nearMinX ? sel.maxX : sel.minX,
+                           anchorY: nearMinY ? sel.minY : sel.maxY,
+                           fixedX: fixedX, fixedY: fixedY)
+        case .edgeLeft:
+            return .resize(anchorX: sel.maxX, anchorY: nil, fixedX: fixedX, fixedY: fixedY)
+        case .edgeRight:
+            return .resize(anchorX: sel.minX, anchorY: nil, fixedX: fixedX, fixedY: fixedY)
+        case .edgeBottom:
+            return .resize(anchorX: nil, anchorY: sel.minY, fixedX: fixedX, fixedY: fixedY)
+        case .edgeTop:
+            return .resize(anchorX: nil, anchorY: sel.maxY, fixedX: fixedX, fixedY: fixedY)
+        case .inside:
             return .move(offset: NSPoint(x: pixel.x - sel.minX, y: pixel.y - sel.minY))
+        case nil:
+            return .select(anchor: pixel)
         }
-
-        return .select(anchor: pixel)
     }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         guard currentURL != nil, !overlay.frame.contains(point) else { return }
+
+        // The "k crop" badge acts as a button.
+        if let hint = cropOverlay.hintRect, hint.contains(point) {
+            cropAndSave()
+            return
+        }
+
         let mode = dragMode(forViewPoint: point)
         dragMode = mode
-        // A plain press outside the selection clears it (a click leaves it cleared).
-        if case .select = mode {
+        switch mode {
+        case .move:
+            NSCursor.closedHand.set()
+        case .select:
+            // A plain press outside the selection clears it (a click leaves it cleared).
             setCropSelection(nil)
+        default:
+            break
         }
     }
 
@@ -632,6 +651,64 @@ final class ImageView: NSView {
         dragMode = nil
         if let sel = cropSelectionPx, sel.width < 1 || sel.height < 1 {
             setCropSelection(nil)
+        }
+        cursor(at: convert(event.locationInWindow, from: nil)).set()
+    }
+
+    // MARK: - Cursor feedback
+
+    private var trackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        cursor(at: convert(event.locationInWindow, from: nil)).set()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    /// The cursor that tells the user what a press at `point` would do.
+    private func cursor(at point: NSPoint) -> NSCursor {
+        guard currentURL != nil, !overlay.frame.contains(point) else { return .arrow }
+        if let hint = cropOverlay.hintRect, hint.contains(point) { return .pointingHand }
+
+        switch selectionZone(at: point) {
+        case .corner(let nearMinX, let nearMinY):
+            if #available(macOS 15.0, *) {
+                // View-space corner -> screen position (view minY is the bottom).
+                let position: NSCursor.FrameResizePosition = switch (nearMinX, nearMinY) {
+                case (true, true): .bottomLeft
+                case (true, false): .topLeft
+                case (false, true): .bottomRight
+                case (false, false): .topRight
+                }
+                return .frameResize(position: position, directions: .all)
+            }
+            return .crosshair
+        case .edgeLeft, .edgeRight:
+            return .resizeLeftRight
+        case .edgeBottom, .edgeTop:
+            return .resizeUpDown
+        case .inside:
+            return .openHand
+        case nil:
+            if let imageFrame = currentImageFrameInView(), imageFrame.contains(point) {
+                return .crosshair
+            }
+            return .arrow
         }
     }
 

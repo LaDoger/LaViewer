@@ -27,12 +27,16 @@ final class PassthroughImageView: NSImageView {
 /// selection is outlined with corner handles and a "k crop" hint badge.
 /// Mouse-transparent.
 final class CropOverlayView: NSView {
-    static let handleSize: CGFloat = 8
-
     /// Selection rect in this view's coordinate space, or nil for no selection.
     var selectionRect: NSRect? {
-        didSet { needsDisplay = true }
+        didSet {
+            if selectionRect == nil { hintRect = nil }
+            needsDisplay = true
+        }
     }
+
+    /// Where the "k crop" badge was last drawn (view coordinates), for click hit-testing.
+    private(set) var hintRect: NSRect?
 
     private static let hintText: NSAttributedString = {
         let keyAttrs: [NSAttributedString.Key: Any] = [
@@ -68,21 +72,30 @@ final class CropOverlayView: NSView {
         drawHint(for: sel)
     }
 
+    /// Preview-style corner brackets: thick rounded L-shapes hugging each corner.
     private func drawHandles(for sel: NSRect) {
-        let hs = Self.handleSize
-        let corners = [
-            NSPoint(x: sel.minX, y: sel.minY),
-            NSPoint(x: sel.minX, y: sel.maxY),
-            NSPoint(x: sel.maxX, y: sel.minY),
-            NSPoint(x: sel.maxX, y: sel.maxY),
+        let leg: CGFloat = 14
+        let corners: [(point: NSPoint, dx: CGFloat, dy: CGFloat)] = [
+            (NSPoint(x: sel.minX, y: sel.minY), 1, 1),
+            (NSPoint(x: sel.minX, y: sel.maxY), 1, -1),
+            (NSPoint(x: sel.maxX, y: sel.minY), -1, 1),
+            (NSPoint(x: sel.maxX, y: sel.maxY), -1, -1),
         ]
+        let path = NSBezierPath()
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
         for corner in corners {
-            let rect = NSRect(x: corner.x - hs / 2, y: corner.y - hs / 2, width: hs, height: hs)
-            NSColor.white.setFill()
-            NSBezierPath(rect: rect).fill()
-            NSColor.black.withAlphaComponent(0.6).setStroke()
-            NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5)).stroke()
+            path.move(to: NSPoint(x: corner.point.x, y: corner.point.y + corner.dy * leg))
+            path.line(to: corner.point)
+            path.line(to: NSPoint(x: corner.point.x + corner.dx * leg, y: corner.point.y))
         }
+        // Dark underlay first so the brackets stay visible over light image areas.
+        NSColor.black.withAlphaComponent(0.35).setStroke()
+        path.lineWidth = 5
+        path.stroke()
+        NSColor.white.setStroke()
+        path.lineWidth = 3
+        path.stroke()
     }
 
     private func drawHint(for sel: NSRect) {
@@ -101,6 +114,7 @@ final class CropOverlayView: NSView {
         origin.y = max(4, min(origin.y, bounds.maxY - pillSize.height - 4))
 
         let pillRect = NSRect(origin: origin, size: pillSize)
+        hintRect = pillRect
         NSColor.black.withAlphaComponent(0.65).setFill()
         NSBezierPath(roundedRect: pillRect, xRadius: 5, yRadius: 5).fill()
         Self.hintText.draw(at: NSPoint(x: origin.x + padH, y: origin.y + padV))
