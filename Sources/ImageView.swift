@@ -1,4 +1,5 @@
 import Cocoa
+import ImageIO
 import UniformTypeIdentifiers
 
 final class ImageView: NSView {
@@ -7,19 +8,28 @@ final class ImageView: NSView {
         case real
     }
 
-    private let fitImageView = NSImageView()
+    private let fitImageView = PassthroughImageView()
     private let scrollView = NSScrollView()
-    private let realImageView = PannableImageView()
+    private let realImageView = PassthroughImageView()
 
     private let overlay = NSView()
+    private let cropOverlay = CropOverlayView()
     private let legendLabel = NSTextField(labelWithString: "")
     private let resolutionLabel = NSTextField(labelWithString: "")
     private let hintLabel = NSTextField(labelWithString: "Drop a file here, or press ⌘O")
+    private let centerMessageLabel = NSTextField(labelWithString: "")
 
     private var currentURL: URL?
     private var siblings: [URL] = []
     private var currentIndex: Int = 0
     private var displayMode: DisplayMode = .fit
+    private var imagePixelSize: NSSize = .zero
+
+    /// Crop selection in image-pixel coordinates, origin at the image's top-left.
+    private var cropSelectionPx: NSRect?
+    private var dragAnchorPx: NSPoint?
+
+    private var boundsObserver: NSObjectProtocol?
 
     private static func legend(toggleLabel: String) -> NSAttributedString {
         let keyAttrs: [NSAttributedString.Key: Any] = [
@@ -36,6 +46,8 @@ final class ImageView: NSView {
             ("→", "next"),
             ("r", "random"),
             ("0", toggleLabel),
+            ("drag", "select"),
+            ("k", "crop"),
         ]
         let result = NSMutableAttributedString()
         for (i, item) in items.enumerated() {
@@ -52,14 +64,32 @@ final class ImageView: NSView {
         layer?.backgroundColor = NSColor.black.cgColor
 
         setupImageViews()
+        setupCropOverlay()
         setupOverlay()
+        setupCenterMessage()
         setupHint()
 
         registerForDraggedTypes([.fileURL])
+
+        // Keep the selection glued to the image while the user scrolls in real-size mode.
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        boundsObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshCropOverlay()
+        }
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let boundsObserver {
+            NotificationCenter.default.removeObserver(boundsObserver)
+        }
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -69,6 +99,7 @@ final class ImageView: NSView {
         if displayMode == .real {
             refreshRealSizeLayout()
         }
+        refreshCropOverlay()
     }
 
     // MARK: - Setup
@@ -91,7 +122,7 @@ final class ImageView: NSView {
         scrollView.drawsBackground = true
         scrollView.backgroundColor = .black
         // No visible scroller indicators: they'd sit right on top of the bottom overlay bar.
-        // Trackpad scrolling and click-drag panning both still work without them.
+        // Trackpad scrolling still works without them.
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
         scrollView.isHidden = true
@@ -116,6 +147,20 @@ final class ImageView: NSView {
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    private func setupCropOverlay() {
+        cropOverlay.translatesAutoresizingMaskIntoConstraints = false
+        cropOverlay.wantsLayer = true
+        cropOverlay.layer?.zPosition = 50
+        addSubview(cropOverlay)
+
+        NSLayoutConstraint.activate([
+            cropOverlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            cropOverlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            cropOverlay.topAnchor.constraint(equalTo: topAnchor),
+            cropOverlay.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }
 
@@ -161,6 +206,48 @@ final class ImageView: NSView {
         ])
     }
 
+    private func setupCenterMessage() {
+        centerMessageLabel.translatesAutoresizingMaskIntoConstraints = false
+        centerMessageLabel.isEditable = false
+        centerMessageLabel.isBordered = false
+        centerMessageLabel.drawsBackground = false
+        centerMessageLabel.alignment = .center
+        centerMessageLabel.textColor = .white
+        centerMessageLabel.font = .systemFont(ofSize: 26, weight: .semibold)
+        centerMessageLabel.wantsLayer = true
+        centerMessageLabel.layer?.zPosition = 200
+        centerMessageLabel.alphaValue = 0
+        centerMessageLabel.shadow = {
+            let s = NSShadow()
+            s.shadowColor = NSColor.black.withAlphaComponent(0.8)
+            s.shadowBlurRadius = 6
+            s.shadowOffset = NSSize(width: 0, height: -1)
+            return s
+        }()
+        addSubview(centerMessageLabel)
+
+        NSLayoutConstraint.activate([
+            centerMessageLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            centerMessageLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            centerMessageLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 20),
+            centerMessageLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -20),
+        ])
+    }
+
+    /// Flash a message in the center that fades out.
+    private func showCenterMessage(_ text: String) {
+        centerMessageLabel.stringValue = text
+        centerMessageLabel.layer?.removeAllAnimations()
+        centerMessageLabel.alphaValue = 1
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 1.6
+                self.centerMessageLabel.animator().alphaValue = 0
+            }
+        }
+    }
+
     private func setupHint() {
         hintLabel.textColor = NSColor.white.withAlphaComponent(0.4)
         hintLabel.font = .systemFont(ofSize: 14, weight: .medium)
@@ -195,11 +282,12 @@ final class ImageView: NSView {
         window?.makeFirstResponder(self)
 
         if let image, let pixelSize = Self.pixelSize(of: image) {
-            resolutionLabel.stringValue = String(format: "%d x %d", Int(pixelSize.width), Int(pixelSize.height))
+            imagePixelSize = pixelSize
         } else {
-            resolutionLabel.stringValue = ""
+            imagePixelSize = .zero
         }
 
+        setCropSelection(nil)
         applyDisplayMode()
     }
 
@@ -246,6 +334,7 @@ final class ImageView: NSView {
 
     private func toggleDisplayMode() {
         displayMode = (displayMode == .fit) ? .real : .fit
+        setCropSelection(nil)
         applyDisplayMode()
     }
 
@@ -264,9 +353,8 @@ final class ImageView: NSView {
     }
 
     private func layoutRealSize() {
-        guard let image = realImageView.image else { return }
-        let pixelSize = Self.pixelSize(of: image) ?? image.size
-        realImageView.frame = NSRect(origin: .zero, size: pixelSize)
+        guard realImageView.image != nil, imagePixelSize.width > 0 else { return }
+        realImageView.frame = NSRect(origin: .zero, size: imagePixelSize)
 
         // Force the whole container to settle its final size now, so the clip view's
         // bounds below are accurate rather than relying on a later, uncertain layout pass.
@@ -279,8 +367,8 @@ final class ImageView: NSView {
         }
     }
 
-    /// Recenters the image and locks scrolling/panning on any axis where it already
-    /// fits the window, so a fully-visible image can't rubber-band or be dragged.
+    /// Recenters the image and locks scrolling on any axis where it already
+    /// fits the window, so a fully-visible image can't rubber-band.
     private func refreshRealSizeLayout() {
         let clipView = scrollView.contentView
         let doc = realImageView.frame.size
@@ -305,12 +393,151 @@ final class ImageView: NSView {
         return NSSize(width: rep.pixelsWide, height: rep.pixelsHigh)
     }
 
+    // MARK: - Coordinate mapping (view space <-> image pixel space)
+
+    /// The rect the image currently occupies, in this view's coordinates.
+    private func currentImageFrameInView() -> NSRect? {
+        guard imagePixelSize.width > 0, imagePixelSize.height > 0 else { return nil }
+        switch displayMode {
+        case .fit:
+            let scale = min(bounds.width / imagePixelSize.width, bounds.height / imagePixelSize.height)
+            let size = NSSize(width: imagePixelSize.width * scale, height: imagePixelSize.height * scale)
+            return NSRect(x: (bounds.width - size.width) / 2,
+                          y: (bounds.height - size.height) / 2,
+                          width: size.width, height: size.height)
+        case .real:
+            return convert(realImageView.bounds, from: realImageView)
+        }
+    }
+
+    /// View point -> image pixel point (top-left origin), clamped to the image.
+    private func pixelPoint(fromViewPoint point: NSPoint) -> NSPoint? {
+        guard let frame = currentImageFrameInView(), frame.width > 0, frame.height > 0 else { return nil }
+        let relX = min(max((point.x - frame.minX) / frame.width, 0), 1)
+        let relY = min(max((point.y - frame.minY) / frame.height, 0), 1)
+        return NSPoint(x: relX * imagePixelSize.width,
+                       y: (1 - relY) * imagePixelSize.height)
+    }
+
+    /// Image pixel rect (top-left origin) -> view rect.
+    private func viewRect(fromPixelRect rect: NSRect) -> NSRect? {
+        guard let frame = currentImageFrameInView(), imagePixelSize.width > 0 else { return nil }
+        let sx = frame.width / imagePixelSize.width
+        let sy = frame.height / imagePixelSize.height
+        return NSRect(x: frame.minX + rect.minX * sx,
+                      y: frame.minY + (imagePixelSize.height - rect.maxY) * sy,
+                      width: rect.width * sx,
+                      height: rect.height * sy)
+    }
+
+    // MARK: - Crop selection
+
+    private func setCropSelection(_ rect: NSRect?) {
+        cropSelectionPx = rect
+        refreshCropOverlay()
+        updateResolutionLabel()
+    }
+
+    private func refreshCropOverlay() {
+        if let sel = cropSelectionPx, let viewSel = viewRect(fromPixelRect: sel) {
+            cropOverlay.selectionRect = viewSel
+        } else {
+            cropOverlay.selectionRect = nil
+        }
+    }
+
+    private func updateResolutionLabel() {
+        if let sel = cropSelectionPx {
+            resolutionLabel.stringValue = String(format: "%d x %d", Int(sel.width), Int(sel.height))
+        } else if imagePixelSize.width > 0 {
+            resolutionLabel.stringValue = String(
+                format: "%d x %d", Int(imagePixelSize.width), Int(imagePixelSize.height))
+        } else {
+            resolutionLabel.stringValue = ""
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard currentURL != nil, !overlay.frame.contains(point) else { return }
+        dragAnchorPx = pixelPoint(fromViewPoint: point)
+        // A fresh press always clears the previous selection (a plain click leaves it cleared).
+        setCropSelection(nil)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let anchor = dragAnchorPx else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard let current = pixelPoint(fromViewPoint: point) else { return }
+        let rect = NSRect(x: min(anchor.x, current.x),
+                          y: min(anchor.y, current.y),
+                          width: abs(anchor.x - current.x),
+                          height: abs(anchor.y - current.y)).integral
+        setCropSelection(rect)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        dragAnchorPx = nil
+        if let sel = cropSelectionPx, sel.width < 1 || sel.height < 1 {
+            setCropSelection(nil)
+        }
+    }
+
+    // MARK: - Crop & save
+
+    private func cropAndSave() {
+        guard let url = currentURL,
+              let sel = cropSelectionPx, sel.width >= 1, sel.height >= 1 else {
+            NSSound.beep()
+            return
+        }
+        // Crop from the file's original pixels, not the display pipeline.
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let fullImage = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              let cropped = fullImage.cropping(to: CGRect(x: sel.minX, y: sel.minY,
+                                                          width: sel.width, height: sel.height)) else {
+            NSSound.beep()
+            return
+        }
+
+        let destination = nextCropURL(for: url)
+        let typeID = UTType(filenameExtension: destination.pathExtension)?.identifier ?? UTType.png.identifier
+        guard let dest = CGImageDestinationCreateWithURL(destination as CFURL, typeID as CFString, 1, nil) else {
+            NSSound.beep()
+            return
+        }
+        CGImageDestinationAddImage(dest, cropped, nil)
+        guard CGImageDestinationFinalize(dest) else {
+            NSSound.beep()
+            return
+        }
+
+        setCropSelection(nil)
+        showCenterMessage("Saved \(destination.lastPathComponent)")
+        // The new file is a sibling image; rescan so arrow-key navigation can reach it.
+        scanSiblings(for: url)
+    }
+
+    private func nextCropURL(for url: URL) -> URL {
+        let folder = url.deletingLastPathComponent()
+        let base = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
+        var index = 1
+        var candidate: URL
+        repeat {
+            candidate = folder.appendingPathComponent("\(base)_\(index).\(ext)")
+            index += 1
+        } while FileManager.default.fileExists(atPath: candidate.path)
+        return candidate
+    }
+
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case 123: navigate(by: -1); return // left arrow
         case 124: navigate(by: 1); return  // right arrow
+        case 53: setCropSelection(nil); return // escape
         default: break
         }
 
@@ -318,6 +545,7 @@ final class ImageView: NSView {
             switch chars {
             case "r": randomImage(); return
             case "0": toggleDisplayMode(); return
+            case "k": cropAndSave(); return
             default: break
             }
         }

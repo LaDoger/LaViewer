@@ -12,12 +12,15 @@ Native Swift + AppKit. No dependencies, no Xcode project — one shell script bu
 | `→` | Next image in the same folder |
 | `r` | Jump to a random image in the same folder |
 | `0` | Toggle between fit-screen (default) and real size |
+| drag | Select a crop area (Preview-style) |
+| `k` | Crop the selection — saves `{filename}_{i}.{extension}` next to the original |
+| `esc` | Clear the crop selection (a plain click clears it too) |
 | `⌘O` | Open an image |
 | `⌃W` / `⌘Q` | Quit |
 
 You can also drag an image file onto the window. The app reopens the last viewed image on launch.
 
-In real-size mode the image is shown at its actual pixel dimensions, centered; when it is larger than the window you can pan with trackpad scrolling or by click-dragging. Every `0` press re-centers. The bottom-right corner shows the image resolution (e.g. `2704 x 1756`).
+In real-size mode the image is shown at its actual pixel dimensions, centered; when it is larger than the window you can pan with trackpad scrolling. Every `0` press re-centers. The bottom-right corner shows the image resolution (e.g. `2704 x 1756`), or the selection's width × height in image pixels while a crop area is selected.
 
 ## Building
 
@@ -34,13 +37,13 @@ The build script compiles `Sources/*.swift` with `swiftc`, assembles the `.app` 
 
 ```
 Sources/
-  main.swift               App entry point
-  AppDelegate.swift        Window, menu, file-open handling
-  ImageView.swift          Image display, folder navigation, hotkeys, overlay UI
-  PannableImageView.swift  Centering clip view + click-drag panning for real-size mode
-Info.plist                 Bundle metadata
-icon.jpg                   App icon source (1024×1024+ square JPEG)
-build.sh                   Build script → build/LaViewer.app
+  main.swift          App entry point
+  AppDelegate.swift   Window, menu, file-open handling
+  ImageView.swift     Image display, folder navigation, hotkeys, crop selection, overlay UI
+  SupportViews.swift  Centering clip view, mouse-passthrough image view, crop overlay
+Info.plist            Bundle metadata
+icon.jpg              App icon source (1024×1024+ square JPEG)
+build.sh              Build script → build/LaViewer.app
 ```
 
 ## Notes
@@ -48,5 +51,6 @@ build.sh                   Build script → build/LaViewer.app
 - "Same folder" navigation lists sibling files whose extension conforms to `public.image`, sorted by filename (natural/numeric-aware order).
 - At the first/last image, `←`/`→` do nothing (no wraparound).
 - Real size means actual pixel dimensions (1 image pixel = 1 point), not adjusted for Retina backing scale.
-- Scrolling/panning is locked on any axis where the image already fits the window, so a fully-visible image can't rubber-band or be dragged.
+- Scrolling is locked on any axis where the image already fits the window, so a fully-visible image can't rubber-band.
+- Crops are taken from the file's original pixels (via ImageIO), not the display pipeline, and are saved in the same format as the source. Filenames auto-increment and never overwrite.
 - The app is ad-hoc signed, so it runs locally but will trigger Gatekeeper if distributed to other machines.
