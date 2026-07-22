@@ -28,7 +28,7 @@ final class ImageView: NSView {
     private let widthField = SelectAllTextField(string: "")
     private let heightField = SelectAllTextField(string: "")
     private let dimsSeparatorLabel = NSTextField(labelWithString: "x")
-    private let editLabel = NSTextField(labelWithString: "edit:")
+    private let editLabel = NSTextField(labelWithString: "crop:")
     private let colorSwatch = NSView()
     private let colorHexLabel = NSTextField(labelWithString: "")
     private var colorSampleRep: NSBitmapImageRep?
@@ -287,14 +287,14 @@ final class ImageView: NSView {
 
             heightField.trailingAnchor.constraint(equalTo: overlay.trailingAnchor, constant: -10),
             heightField.firstBaselineAnchor.constraint(equalTo: dimsSeparatorLabel.firstBaselineAnchor),
-            heightField.widthAnchor.constraint(equalToConstant: 44),
+            heightField.widthAnchor.constraint(equalToConstant: 32),
 
             dimsSeparatorLabel.trailingAnchor.constraint(equalTo: heightField.leadingAnchor, constant: -4),
             dimsSeparatorLabel.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
 
             widthField.trailingAnchor.constraint(equalTo: dimsSeparatorLabel.leadingAnchor, constant: -4),
             widthField.firstBaselineAnchor.constraint(equalTo: dimsSeparatorLabel.firstBaselineAnchor),
-            widthField.widthAnchor.constraint(equalToConstant: 44),
+            widthField.widthAnchor.constraint(equalToConstant: 32),
 
             editLabel.trailingAnchor.constraint(equalTo: widthField.leadingAnchor, constant: -6),
             editLabel.firstBaselineAnchor.constraint(equalTo: dimsSeparatorLabel.firstBaselineAnchor),
