@@ -241,8 +241,17 @@ final class ImageView: NSView {
         widthField.nextKeyView = heightField
         heightField.nextKeyView = widthField
 
-        editLabel.textColor = NSColor.white.withAlphaComponent(0.45)
-        editLabel.font = .systemFont(ofSize: 11)
+        // "k" rendered as a key chip like the legend items, followed by "crop:".
+        let editText = NSMutableAttributedString(string: " k ", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.85),
+            .backgroundColor: NSColor.white.withAlphaComponent(0.18),
+        ])
+        editText.append(NSAttributedString(string: " crop:", attributes: [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.6),
+        ]))
+        editLabel.attributedStringValue = editText
         editLabel.translatesAutoresizingMaskIntoConstraints = false
         editLabel.isEditable = false
         editLabel.isBordered = false
